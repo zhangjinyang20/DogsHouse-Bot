@@ -1,18 +1,20 @@
+import asyncio
 import json
 import random
-import re
 import time
-from datetime import datetime, timezone, timedelta
-from utils.core import logger
-from pyrogram import Client
-from pyrogram.raw.functions.messages import RequestAppWebView
-from pyrogram.raw.types import InputBotAppShortName
-import asyncio
-from urllib.parse import unquote, quote
-from data import config
+from asyncio import sleep
+from urllib.parse import unquote
+
 import aiohttp
-from fake_useragent import UserAgent
+import requests
 from aiohttp_socks import ProxyConnector
+from better_proxy import Proxy
+from fake_useragent import UserAgent
+from pyrogram import Client
+from pyrogram.raw.functions.messages import RequestWebView
+
+from data import config
+from utils.core import logger
 
 
 class DogsHouse:
@@ -45,69 +47,137 @@ class DogsHouse:
         headers = {'User-Agent': UserAgent(os='android').random}
         self.session = aiohttp.ClientSession(headers=headers, trust_env=True, connector=connector)
 
-    async def verify_task(self, slug: str):
-        resp = await self.session.post(f'https://api.onetime.dog/tasks/verify?task={slug}&user_id={self.telegram_id}&reference={self.reference}')
-        return (await resp.json()).get('success')
-
-    async def get_tasks(self):
-        resp = await self.session.get(f'https://api.onetime.dog/tasks?user_id={self.telegram_id}&reference={self.reference}')
-        return await resp.json()
-
-    async def stats(self):
-        balance, age, wallet, streak = await self.login(True)
-
-        r = await (await self.session.get(f'https://api.onetime.dog/leaderboard?user_id={self.telegram_id}')).json()
-        leaderboard = r.get('me').get('score')
-
-        r = await (await self.session.get(f'https://api.onetime.dog/frens?user_id={self.telegram_id}&reference={self.reference}')).json()
-        referrals = r.get('count')
-        referral_link = f'https://t.me/dogshouse_bot/join?startapp={self.reference}'
-
-        await self.logout()
-
-        await self.client.connect()
-        me = await self.client.get_me()
-        phone_number, name = "'" + me.phone_number, f"{me.first_name} {me.last_name if me.last_name is not None else ''}"
-        await self.client.disconnect()
-
-        proxy = self.proxy.replace('http://', "") if self.proxy is not None else '-'
-
-        return [phone_number, name, str(balance), str(leaderboard), str(age), str(streak), str(referrals), referral_link, str(wallet), proxy]
-
     async def logout(self):
+        logger.info(f"sign {self.account} | loginOut")
         await self.session.close()
 
-    async def login(self, stats: bool = False):
+    async def login(self, proxy: Proxy):
         await asyncio.sleep(random.uniform(*config.DELAYS['ACCOUNT']))
         query = await self.get_tg_web_data()
-
         if query is None:
             logger.error(f"Thread {self.thread} | {self.account} | Session {self.account} invalid")
             await self.logout()
             return None, None
-
-        r = await (await self.session.post(f'https://api.onetime.dog/join?invite_hash={self.ref_code}', data=query)).json()
-        self.reference = r.get('reference')
-        self.telegram_id = r.get('telegram_id')
-
-        if stats: return r.get('balance'), r.get('age'), r.get('wallet'), r.get('streak')
-        else: return r.get('balance'), r.get('age')
-
+        param = unquote(query).split("&")
+        pm = {}
+        for iterating_var in param:
+            kv = iterating_var.split("=")
+            if kv[0] == 'user':
+                pm[kv[0]] = json.loads(kv[1])
+            else:
+                pm[kv[0]] = kv[1]
+        proxies = {
+            "http": "socks5://" + proxy,
+            "https": "socks5://" + proxy
+        }
+        head = {
+            "Authorization": self.session.headers.get("Authorization"),
+            "content-type": "application/json",
+            "User-Agent": self.session.headers.get("User-Agent"),
+            "Sec-Ch-Ua-Mobile": "?0",
+            "Sec-Ch-Ua-Platform": "Windows",
+            "Sec-Fetch-Dest": "empty",
+            "Sec-Fetch-Mode": "cors",
+            "Sec-Fetch-Site": "same-site"
+        }
+        #检测代理是否可用
+        check_proxy_availability = requests.get("https://httpbin.org/ip", proxies=proxies)
+        if check_proxy_availability.status_code == 200:
+            ip = check_proxy_availability.json().get("origin")
+            logger.info(f"sign {self.account} | Proxy IP: {ip}")
+        #登录
+        if self.session.headers.get("Authorization") is None:
+            responses = requests.post('https://api.duckcoop.xyz/auth/telegram-login', json=pm, proxies=proxies,
+                                      headers=head)
+            head["Authorization"] = "Bearer " + json.loads(responses.text)['data']['token']
+        #获取是否签到了
+        responses = requests.get('https://api.duckcoop.xyz/checkin/get', proxies=proxies,
+                                 headers=head)
+        # 获取签到前金额
+        total = requests.get('https://api.duckcoop.xyz/reward/get', proxies=proxies,
+                                 headers=head)
+        moneyBefore = json.loads(total.text)['data']['total']
+        if json.loads(responses.text)['data']['can_claim']:
+            # 进行签到
+            responses = requests.post('https://api.duckcoop.xyz/checkin/claim', proxies=proxies,
+                                      headers=head)
+            if json.loads(responses.text)['data']['status']:
+                # 获取签到后金额
+                await asyncio.sleep(20)
+                totalAfter = requests.get('https://api.duckcoop.xyz/reward/get', proxies=proxies,
+                                     headers=head)
+                moneyAfter = json.loads(totalAfter.text)['data']['total']
+                logger.info(f"sign {self.account} | sign success,签到前：{moneyBefore},签到后:{moneyAfter}")
+        await self.logout()
+        return head.get("Authorization")
+    #做任务
+    async def goTotask(self, proxy: Proxy,str):
+        proxies = {
+            "http": "socks5://" + proxy,
+            "https": "socks5://" + proxy
+        }
+        head = {
+            "Authorization": self.session.headers.get("Authorization"),
+            "content-type": "application/json",
+            "User-Agent": self.session.headers.get("User-Agent"),
+            "Sec-Ch-Ua-Mobile": "?0",
+            "Sec-Ch-Ua-Platform": "Windows",
+            "Sec-Fetch-Dest": "empty",
+            "Sec-Fetch-Mode": "cors",
+            "Sec-Fetch-Site": "same-site"
+        }
+        head["Authorization"] =str
+        done_my_list = []
+        my_list = []
+        #获取已经过的任务id
+        doneTaskList = requests.get('https://api.duckcoop.xyz/user-partner-mission/get', proxies=proxies,
+                                  headers=head)
+        dataList = json.loads(doneTaskList.text)['data']
+        for element in dataList:
+            done_my_list.append(element['partner_mission_id'])
+        #获取所有任务列表
+        taskList = requests.get('https://api.duckcoop.xyz/partner-mission/list', proxies=proxies,
+                                  headers=head)
+        resList = json.loads(taskList.text)['data']['data']
+        # 检测代理是否可用
+        check_proxy_availability = requests.get("https://httpbin.org/ip", proxies=proxies)
+        if check_proxy_availability.status_code == 200:
+            ip = check_proxy_availability.json().get("origin")
+            logger.info(f"task {self.account} | Proxy IP: {ip}")
+        for el in resList:
+            partner_missions =el['partner_missions']
+            for e in partner_missions:
+               if e['pm_id'] not in done_my_list:
+                    my_list.append(e['pm_id'])
+        for  tk in my_list:
+           try:
+               pr = {
+                   "partner_mission_id": tk
+               }
+               requests.post('https://api.duckcoop.xyz/user-partner-mission/claim', json=pr, proxies=proxies,
+                             headers=head)
+               time.sleep(1)
+               taskAfter = requests.get('https://api.duckcoop.xyz/reward/get', proxies=proxies,
+                                        headers=head)
+               moneyTaskAfter = json.loads(taskAfter.text)['data']['total']
+               logger.info(f"task {self.account} id:{tk} | task success, money:{moneyTaskAfter}")
+           except:
+               return None
+    #获取tg的重要信息
     async def get_tg_web_data(self):
         try:
             await self.client.connect()
-
-            web_view = await self.client.invoke(RequestAppWebView(
-                peer=await self.client.resolve_peer('dogshouse_bot'),
-                app=InputBotAppShortName(bot_id=await self.client.resolve_peer('dogshouse_bot'), short_name="join"),
+            web_view = await self.client.invoke(RequestWebView(
+                peer=await self.client.resolve_peer('duckscoop_bot'),
+                bot=await self.client.resolve_peer('duckscoop_bot'),
                 platform='android',
-                write_allowed=True,
-                start_param=self.ref_code
+                from_bot_menu=False,
+                url='https://app.duckcoop.xyz/',
             ))
             await self.client.disconnect()
             auth_url = web_view.url
             query = unquote(string=auth_url.split('tgWebAppData=')[1].split('&tgWebAppVersion')[0])
             return query
-
         except:
             return None
+
