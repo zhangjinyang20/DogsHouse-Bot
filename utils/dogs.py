@@ -110,6 +110,59 @@ class DogsHouse:
                 logger.info(f"sign {self.account} | sign success,签到前：{moneyBefore},签到后:{moneyAfter}")
         await self.logout()
         return head.get("Authorization")
+
+    async def goToTask1(self, proxy: Proxy,str):
+        proxies = {
+            "http": "socks5://" + proxy,
+            "https": "socks5://" + proxy
+        }
+        head = {
+            "Authorization": self.session.headers.get("Authorization"),
+            "content-type": "application/json",
+            "User-Agent": self.session.headers.get("User-Agent"),
+            "Sec-Ch-Ua-Mobile": "?0",
+            "Sec-Ch-Ua-Platform": "Windows",
+            "Sec-Fetch-Dest": "empty",
+            "Sec-Fetch-Mode": "cors",
+            "Sec-Fetch-Site": "same-site"
+        }
+        head["Authorization"] = str
+        done_my_list = []
+        my_list = []
+        # 获取已经过的任务id
+        doneTaskList = requests.get('https://api.duckcoop.xyz/user-ambassador-mission/get', proxies=proxies,
+                                    headers=head)
+        dataList = json.loads(doneTaskList.text)['data']
+        for element in dataList:
+            done_my_list.append(element['ambassador_mission_id'])
+        # 获取所有任务列表
+        taskList = requests.get('https://api.duckcoop.xyz/ambassador-mission/list', proxies=proxies,
+                                headers=head)
+        resList = json.loads(taskList.text)['data']['data']
+        # 检测代理是否可用
+        check_proxy_availability = requests.get("https://httpbin.org/ip", proxies=proxies)
+        if check_proxy_availability.status_code == 200:
+            ip = check_proxy_availability.json().get("origin")
+            logger.info(f"task {self.account} | Proxy IP: {ip}")
+        for el in resList:
+            partner_missions = el['ambassador_missions']
+            for e in partner_missions:
+                if e['am_id'] not in done_my_list:
+                    my_list.append(e['am_id'])
+        for  tk in my_list:
+           try:
+               pr = {
+                   "ambassador_mission_id": tk
+               }
+               requests.post('https://api.duckcoop.xyz/user-ambassador-mission/claim', json=pr, proxies=proxies,
+                             headers=head)
+               time.sleep(1)
+               taskAfter = requests.get('https://api.duckcoop.xyz/reward/get', proxies=proxies,
+                                        headers=head)
+               moneyTaskAfter = json.loads(taskAfter.text)['data']['total']
+               logger.info(f"task {self.account} id:{tk} | task success, money:{moneyTaskAfter}")
+           except:
+               return None
     #做任务
     async def goTotask(self, proxy: Proxy,str):
         proxies = {
